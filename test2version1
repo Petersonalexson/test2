@@ -1,0 +1,456 @@
+"""
+Script Name: Montblanc vs. Alfa Data Comparison
+
+Description:
+    This script reads multiple Montblanc Excel files from a specified folder,
+    skipping files that contain "Connel" in the name and only processing files
+    where the dimension (from cell A1) is in VALID_MONTBLANC_DIMS. If the dimension is 
+    "Enfield," the values are remapped using a provided mapping dictionary (ENFIELD_VALUE_MAP).
+    
+    The script also reads an Alfa file (columns E, F, and K corresponding to 
+    [DIM_Alfa, V_Alfa, End Date]), filters by valid dimensions, and—for 
+    dimensions "Enfield"—applies the same remapping on Alfa values.
+    
+    Next, the script merges Montblanc versus Alfa data on the concatenated key (DIM + V)
+    to indicate whether records match or if data is missing on one side.
+    Exceptions are then merged (by dimension) to add any applicable comments.
+    
+    Finally, the results are written to an existing OUTPUT.xlsx file (in the specified
+    sheet) with color-coded columns and a thin header border. The final output order
+    (and names) are as follows:
+        Down Charlie, Under Charlie, Down Australia, Under Australia, Status, Comments, Flag
+
+Usage:
+    1. Update the constants 
+    2. Adjust VALID_MONTBLANC_DIMS and mapping dictionaries as needed.
+    3. Run:
+         python this_script.py
+    4. Check the specified output sheet in OUTPUT.xlsx.
+    
+Author: Alex
+Date: 2025-01-02
+"""
+
+import os
+import logging
+import math
+import pandas as pd
+from pathlib import Path
+from openpyxl import load_workbook, Workbook
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.dataframe import dataframe_to_rows
+
+# ----------------------------------------------------------------------------
+# 1. Logging Configuration
+# ----------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger()
+
+# ----------------------------------------------------------------------------
+# 2. File Paths & Constants
+# ----------------------------------------------------------------------------
+
+# (A) Montblanc
+F_MONTBLANC_FOLDER = Path(
+MONTBLANC_SHEET = "kurt@a.com_OiHey"  # Assumed sheet name for all Montblanc files
+
+# (B) Alfa
+ALFA_FILE = Path(
+ALFA_SHEET = "Main"  # The Alfa sheet with columns E, F, K
+
+# (C) Exceptions
+EXCEPTIONS_FILE = Path(
+EXCEPTIONS_SHEET = "Cinspe"  
+
+# (D) Output
+OUTPUT_FILE = Path(
+OUTPUT_SHEET = "CINSPE OUTPUT"
+
+# Montblanc dimensions to process (skip "Connel")
+VALID_MONTBLANC_DIMS = {"Antartica", "Enfield", "IOI", "IRON 1", "Montpellier"}
+
+# For Enfield,   use a mapping dictionary (instead of automatic scientific conversion)
+ENFIELD_VALUE_MAP = {
+    "10": "1E01",
+    "100": "1E02",
+    "1000": "1E03",
+    # Add additional mappings as needed.
+}
+
+# ----------------------------------------------------------------------------
+# 3. Remap Functions
+# ----------------------------------------------------------------------------
+def remap_enfield_value(value: str, mapping: dict) -> str:
+    """
+    For the Enfield dimension (either in Montblanc or Alfa data),
+    if the value exists in the mapping dictionary, return the mapped value;
+    otherwise, return the original value.
+    """
+    if value in mapping:
+        return mapping[value]
+    return value
+
+# ----------------------------------------------------------------------------
+# 4. Reading Montblanc Files
+# ----------------------------------------------------------------------------
+def read_montblanc_data(folder: Path) -> pd.DataFrame:
+    """
+    Reads Montblanc files from 'folder' (skips files containing "Connel").
+    For each file:
+      - Reads dimension in cell A1 and values in column A starting from A2.
+      - Only keeps files where the dimension is in VALID_MONTBLANC_DIMS.
+      - If the dimension is "Enfield", remap the value using ENFIELD_VALUE_MAP.
+    Returns a DataFrame with columns: [DIM_Montblanc, V_Montblanc].
+    """
+    all_dfs = []
+    for file_path in folder.glob("*.xlsx"):
+        if "Connel" in file_path.name:
+            logger.info(f"Skipping Connel file: {file_path.name}")
+            continue
+
+        logger.info(f"Reading Montblanc data from: {file_path.name}")
+        try:
+            df_raw = pd.read_excel(file_path, sheet_name=MONTBLANC_SHEET, header=None)
+            # Dimension is in A1
+            dim_name = str(df_raw.iloc[0, 0]).strip()
+            if dim_name not in VALID_MONTBLANC_DIMS:
+                logger.info(f"Dimension '{dim_name}' not in valid set. Skipping file.")
+                continue
+
+            # Values are from row 2 downward in column A
+            values_series = df_raw.iloc[1:, 0].dropna().astype(str).str.strip().reset_index(drop=True)
+            tmp_df = pd.DataFrame({
+                "DIM_Montblanc": [dim_name]*len(values_series),
+                "V_Montblanc": values_series
+            })
+
+            if dim_name == "Enfield":
+                tmp_df["V_Montblanc"] = tmp_df["V_Montblanc"].apply(lambda x: remap_enfield_value(x, ENFIELD_VALUE_MAP))
+            all_dfs.append(tmp_df)
+        except Exception as e:
+            logger.error(f"Error reading {file_path.name}: {e}")
+
+    if not all_dfs:
+        return pd.DataFrame(columns=["DIM_Montblanc", "V_Montblanc"])
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    logger.info(f"Combined Montblanc data: {len(combined_df)} records.")
+    return combined_df
+
+# ----------------------------------------------------------------------------
+# 5. Reading Alfa Data
+# ----------------------------------------------------------------------------
+def read_alfa_data(path: Path, sheet_name: str) -> pd.DataFrame:
+    """
+    Reads the Alfa file from 'path', sheet 'sheet_name', skipping the first 5 rows.
+    Uses columns E, F, and K for [DIM_Alfa, V_Alfa, End Date]. 
+    Filters to only include rows where DIM_Alfa is in VALID_MONTBLANC_DIMS.
+    For rows where DIM_Alfa is 'Enfield', remaps V_Alfa using ENFIELD_VALUE_MAP.
+    Returns a DataFrame with columns: [DIM_Alfa, V_Alfa, End Date].
+    """
+    logger.info(f"Reading Alfa data from: {path.name}")
+    try:
+        # Assume header row is row 6 so   skip the first 5 rows.
+        df_alfa = pd.read_excel(path, sheet_name=sheet_name, skiprows=5, dtype=str)
+        # Columns: E=col index 4, F=col index 5, K=col index 10 (0-indexed order)
+        col_dim = df_alfa.columns[4]
+        col_val = df_alfa.columns[5]
+        col_ed  = df_alfa.columns[10]
+        df_alfa.rename(columns={
+            col_dim: "DIM_Alfa",
+            col_val: "V_Alfa",
+            col_ed:  "End Date"
+        }, inplace=True)
+        df_alfa = df_alfa[["DIM_Alfa", "V_Alfa", "End Date"]].copy()
+        df_alfa.dropna(subset=["DIM_Alfa", "V_Alfa"], inplace=True)
+        df_alfa["DIM_Alfa"] = df_alfa["DIM_Alfa"].astype(str).str.strip()
+        df_alfa["V_Alfa"] = df_alfa["V_Alfa"].astype(str).str.strip()
+
+        df_alfa = df_alfa[df_alfa["DIM_Alfa"].isin(VALID_MONTBLANC_DIMS)].reset_index(drop=True)
+        logger.info(f"Filtered Alfa data: {len(df_alfa)} records after dimension filtering.")
+
+        # For Enfield, apply remap using ENFIELD_VALUE_MAP.
+        mask_enfield = df_alfa["DIM_Alfa"] == "Enfield"
+        df_alfa.loc[mask_enfield, "V_Alfa"] = df_alfa.loc[mask_enfield, "V_Alfa"].apply(lambda x: remap_enfield_value(x, ENFIELD_VALUE_MAP))
+        return df_alfa
+    except Exception as e:
+        logger.error(f"Error reading Alfa file: {e}")
+        return pd.DataFrame(columns=["DIM_Alfa", "V_Alfa", "End Date"])
+
+# ----------------------------------------------------------------------------
+# 6. Reading Exceptions
+# ----------------------------------------------------------------------------
+def read_exceptions(path: Path, sheet_name: str) -> pd.DataFrame:
+    """
+    Reads exceptions from the Excel file.
+    Expects columns: D and 'E R' (which will be renamed to 'Comment').
+    Returns a DataFrame with columns: ['DIM', 'Comment'].
+    """
+    logger.info(f"Reading exceptions from: {path.name}")
+    try:
+        df_exc = pd.read_excel(path, sheet_name=sheet_name, header=0)
+        # Ensure the needed columns exist.
+        required = {"D", "E R"}
+        if not required.issubset(set(df_exc.columns)):
+            missing = required - set(df_exc.columns)
+            logger.error(f"Missing columns in exceptions: {missing}")
+            return pd.DataFrame(columns=["DIM", "Comment"])
+        df_exc = df_exc[["D", "E R"]].rename(columns={"D": "DIM", "E R": "Comment"})
+        df_exc.dropna(subset=["DIM"], inplace=True)
+        df_exc["DIM"] = df_exc["DIM"].astype(str).str.strip()
+        logger.info(f"Exceptions data: {len(df_exc)} records.")
+        return df_exc
+    except Exception as e:
+        logger.error(f"Error reading exceptions: {e}")
+        return pd.DataFrame(columns=["DIM", "Comment"])
+
+# ----------------------------------------------------------------------------
+# 7. Compare Montblanc vs. Alfa
+# ----------------------------------------------------------------------------
+def compare_montblanc_alfa(montblanc_df: pd.DataFrame, alfa_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compares Montblanc vs. Alfa data on the concatenated key (DIM + '|' + V).
+    Returns a DataFrame with a Status column indicating:
+      - 'Match' if the key exists in both,
+      - 'Missing in Alfa' if only in Montblanc,
+      - 'Missing in Montblanc' if only in Alfa.
+    """
+    logger.info("Comparing Montblanc and Alfa data.")
+    m_df = montblanc_df.copy()
+    a_df = alfa_df.copy()
+
+    m_df["key"] = m_df["DIM_Montblanc"].astype(str) + "|" + m_df["V_Montblanc"].astype(str)
+    a_df["key"] = a_df["DIM_Alfa"].astype(str) + "|" + a_df["V_Alfa"].astype(str)
+
+    merged = pd.merge(m_df, a_df, on="key", how="outer", indicator=True)
+    merged["Status"] = "Match"
+    merged.loc[merged["_merge"] == "left_only", "Status"] = "Missing in Alfa"
+    merged.loc[merged["_merge"] == "right_only", "Status"] = "Missing in Montblanc"
+    merged.drop(columns=["_merge", "key"], inplace=True)
+    merged["DIM_Alfa"] = merged["DIM_Alfa"].fillna("")
+    merged["V_Alfa"] = merged["V_Alfa"].fillna("")
+    merged["End Date"] = merged["End Date"].fillna("")
+    logger.info("Comparison completed.")
+    return merged
+
+def merge_with_exceptions(df: pd.DataFrame, exc_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merges the comparison DataFrame with Exceptions on dimension.
+    If DIM_Montblanc is empty, use DIM_Alfa.
+    Adds a 'Comment' column and a blank 'Flag' column.
+    """
+    logger.info("Merging with exceptions.")
+    df["DIM_for_exc"] = df["DIM_Montblanc"]
+    mask_empty = df["DIM_for_exc"].eq("")
+    df.loc[mask_empty, "DIM_for_exc"] = df.loc[mask_empty, "DIM_Alfa"]
+    merged = pd.merge(df, exc_df, left_on="DIM_for_exc", right_on="DIM", how="left")
+    merged["Comment"] = merged["Comment"].fillna("")
+    merged.drop(columns=["DIM_for_exc", "DIM"], inplace=True)
+    merged["Flag"] = ""
+    logger.info("Merge with exceptions completed.")
+    return merged
+
+# ----------------------------------------------------------------------------
+# 8. Write to Existing Excel with Custom Formatting
+# ----------------------------------------------------------------------------
+def write_to_existing_excel_with_custom_column_formatting(df: pd.DataFrame, output_path: Path, sheet_name: str) -> None:
+    """
+    Writes the final DataFrame to an existing Excel
+    using the following output column order (and names):
+         Down Charlie, Under Charlie, Down Australia, Under Australia, Status, Comments, Flag.
+    Applies color-coding and a thin border on the header, and auto-fits columns.
+    """
+    logger.info(f"Writing data to '{output_path}' in sheet '{sheet_name}'.")
+    try:
+        try:
+            wb = load_workbook(output_path)
+            logger.info(f"Opened workbook: {output_path}")
+        except FileNotFoundError:
+            wb = Workbook()
+            logger.warning(f"Output file '{output_path}' does not exist. Created a new one.")
+        if sheet_name in wb.sheetnames:
+            del wb[sheet_name]
+            logger.info(f"Removed existing sheet '{sheet_name}'.")
+        ws = wb.create_sheet(sheet_name)
+
+        # Desired final order and renaming:
+        #  merged DataFrame, assume   have columns:
+        #   DIM_Montblanc, V_Montblanc, DIM_Alfa, V_Alfa, Status, Comment, Flag
+        # Rename as follows:
+        #   DIM_Montblanc -> "Down Charlie"
+        #   V_Montblanc -> "Under Charlie"
+        #   DIM_Alfa -> "Down Australia"
+        #   V_Alfa -> "Under Australia"
+        #   Status -> "Status"
+        #   Comment -> "Comments"
+        #   Flag -> "Flag"
+        desired_columns = ["DIM_Montblanc", "V_Montblanc", "DIM_Alfa", "V_Alfa", "Status", "Comment", "Flag"]
+        df_out = df.copy()
+        df_out = df_out[desired_columns]
+        df_out.rename(columns={
+            "DIM_Montblanc": "Down Charlie",
+            "V_Montblanc": "Under Charlie",
+            "DIM_Alfa": "Down Australia",
+            "V_Alfa": "Under Australia",
+            "Comment": "Comments"
+        }, inplace=True)
+
+        rows = dataframe_to_rows(df_out, index=False, header=True)
+        for r_idx, row_data in enumerate(rows, start=1):
+            for c_idx, val in enumerate(row_data, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=val)
+
+        # Define color fills
+        header_fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")  # Gray for header
+        green_fill  = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # Montblanc columns => Down/Under Charlie
+        blue_fill   = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")    # Alfa columns => Down/Under Australia
+        red_fill    = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")     # For status if missing
+        white_fill  = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")   # For Comments, Flag
+        thin_side   = Side(border_style="thin", color="000000")
+        thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+        # Format header row.
+        header_row = ws[1]
+        for cell in header_row:
+            cell.fill = header_fill
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = thin_border
+
+        # Get header indices by their names.
+        headers = {cell.value: idx for idx, cell in enumerate(ws[1], start=1)}
+        # Expected columns:
+        # "Down Charlie", "Under Charlie" => Montblanc (green)
+        # "Down Australia", "Under Australia" => Alfa (blue)
+        # "Status" => Status color mapping (green if "Match", red otherwise)
+        # "Comments", "Flag" => white
+
+        status_colors = {
+            "Match": green_fill,
+            "Missing in Alfa": red_fill,
+            "Missing in Montblanc": red_fill
+        }
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            # Montblanc side: columns "Down Charlie" and "Under Charlie"
+            if "Down Charlie" in headers:
+                row[headers["Down Charlie"] - 1].fill = green_fill
+            if "Under Charlie" in headers:
+                row[headers["Under Charlie"] - 1].fill = green_fill
+            # Alfa side: columns "Down Australia" and "Under Australia"
+            if "Down Australia" in headers:
+                row[headers["Down Australia"] - 1].fill = blue_fill
+            if "Under Australia" in headers:
+                row[headers["Under Australia"] - 1].fill = blue_fill
+            # Status column: color based on status value
+            if "Status" in headers:
+                status_cell = row[headers["Status"] - 1]
+                status_val = str(status_cell.value)
+                row[headers["Status"] - 1].fill = status_colors.get(status_val, white_fill)
+            # Comments and Flag: white fill
+            if "Comments" in headers:
+                row[headers["Comments"] - 1].fill = white_fill
+            if "Flag" in headers:
+                row[headers["Flag"] - 1].fill = white_fill
+
+        # Auto-fit columns
+        for col_cells in ws.columns:
+            max_length = 0
+            col_letter = get_column_letter(col_cells[0].column)
+            for cell in col_cells:
+                if cell.value is not None:
+                    length = len(str(cell.value))
+                    if length > max_length:
+                        max_length = length
+            ws.column_dimensions[col_letter].width = max(max_length + 2, 12)
+
+        wb.save(output_path)
+        logger.info(f"Excel file updated successfully at '{output_path}', sheet='{sheet_name}'.")
+    except Exception as e:
+        logger.error(f"Error writing data to Excel: {e}", exc_info=True)
+
+# ----------------------------------------------------------------------------
+# 9. Main Execution
+# ----------------------------------------------------------------------------
+def main():
+    """
+    Main function:
+      1. Reads Montblanc data from the specified folder (skips files with "Connel").
+         Applies remapping on Enfield values using ENFIELD_VALUE_MAP.
+      2. Reads Alfa data from the specified file, processing columns E, F, and K.
+         Filters for valid dimensions and applies remapping for Enfield.
+      3. Reads Exceptions data.
+      4. Compares Montblanc vs. Alfa on (DIM, V) to generate a Status.
+      5. Merges in exceptions to populate Comments.
+      6. Rearranges/renames columns to:
+             Down Charlie, Under Charlie, Down Australia, Under Australia, Status, Comments, Flag.
+      7. Writes the output to OUTPUT.xlsx with custom color-coded formatting.
+    """
+    try:
+        # Step 1: Read Montblanc data.
+        montblanc_df = read_montblanc_data(F_MONTBLANC_FOLDER)
+        if montblanc_df.empty:
+            logger.warning("No Montblanc data found.")
+        else:
+            logger.info(f"Montblanc Data: {len(montblanc_df)} records.")
+        
+        # Step 2: Read Alfa data.
+        alfa_df = read_alfa_data(ALFA_FILE, ALFA_SHEET)
+        if alfa_df.empty:
+            logger.warning("No Alfa data found.")
+        else:
+            logger.info(f"Alfa Data: {len(alfa_df)} records.")
+        
+        # Step 3: Read Exceptions.
+        exc_df = read_exceptions(EXCEPTIONS_FILE, EXCEPTIONS_SHEET)
+        if exc_df.empty:
+            logger.warning("No Exceptions data found.")
+        else:
+            logger.info(f"Exceptions Data: {len(exc_df)} records.")
+        
+        # Step 4: Compare Montblanc vs. Alfa.
+        if not montblanc_df.empty and not alfa_df.empty:
+            comparison_df = compare_montblanc_alfa(montblanc_df, alfa_df)
+        else:
+            logger.warning("Insufficient data for comparison.")
+            comparison_df = pd.DataFrame()
+        
+        # Step 5: Merge with Exceptions.
+        if not comparison_df.empty and not exc_df.empty:
+            final_df = merge_with_exceptions(comparison_df, exc_df)
+        elif not comparison_df.empty:
+            final_df = comparison_df.copy()
+            final_df["Comment"] = ""
+            final_df["Flag"] = ""
+        else:
+            final_df = pd.DataFrame()
+        
+        if not final_df.empty:
+            final_df.fillna("", inplace=True)
+            # Step 6: Reorder and rename columns.
+            #   want the final columns: Down Charlie, Under Charlie, Down Australia, Under Australia, Status, Comments, Flag.
+            #  merged DataFrame is assumed to contain:
+            #   DIM_Montblanc, V_Montblanc, DIM_Alfa, V_Alfa, Status, Comment, Flag.
+            desired_cols = ["DIM_Montblanc", "V_Montblanc", "DIM_Alfa", "V_Alfa", "Status", "Comment", "Flag"]
+            final_df = final_df[desired_cols]
+        else:
+            logger.warning("Final DataFrame is empty; nothing to write.")
+        
+        # Step 7: Write to Excel.
+        if not final_df.empty:
+            write_to_existing_excel_with_custom_column_formatting(
+                df=final_df,
+                output_path=OUTPUT_FILE,
+                sheet_name=OUTPUT_SHEET
+            )
+        else:
+            logger.warning("No data to write to Excel.")
+        
+        logger.info("Script executed successfully.")
+    except Exception as e:
+        logger.error(f"An error occurred in main(): {e}", exc_info=True)
+
+if __name__ == "__main__":
+    main()
