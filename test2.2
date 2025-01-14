@@ -1,0 +1,81 @@
+# ----------------------------------------------------------------------------
+# 6. Reading Exceptions (Modified)
+# ----------------------------------------------------------------------------
+def read_exceptions(path: Path, sheet_name: str) -> pd.DataFrame:
+    """
+    Reads exceptions from the Exceptions file.
+    This file is expected to have columns "Val1", "Val2", and "Exception".
+    A key is created by concatenating Val1 and Val2, and Exception is used as the Comment.
+    The resulting DataFrame will have columns: ["Key", "Comment"].
+    """
+    logger.info(f"Reading exceptions from: {path.name}")
+    try:
+        df_exc = pd.read_excel(path, sheet_name=sheet_name, header=0)
+        required = {"Val1", "Val2", "Exception"}
+        if not required.issubset(set(df_exc.columns)):
+            missing = required - set(df_exc.columns)
+            logger.error(f"Missing columns in exceptions sheet: {missing}")
+            return pd.DataFrame(columns=["Key", "Comment"])
+        # Create Key by concatenating Val1 and Val2 after stripping spaces.
+        df_exc["Key"] = df_exc["Val1"].astype(str).str.strip() + df_exc["Val2"].astype(str).str.strip()
+        df_exc = df_exc[["Key", "Exception"]].rename(columns={"Exception": "Comment"})
+        df_exc.dropna(subset=["Key"], inplace=True)
+        logger.info(f"Exceptions data: {len(df_exc)} records after cleaning.")
+        return df_exc
+    except Exception as e:
+        logger.error(f"Error reading exceptions: {e}")
+        return pd.DataFrame(columns=["Key", "Comment"])
+
+# ----------------------------------------------------------------------------
+# 7. Compare Montblanc vs Alfa
+# ----------------------------------------------------------------------------
+def compare_montblanc_alfa(montblanc_df, alfa_df):
+    """
+    Compares Montblanc vs Alfa data on (DIM, V):
+      Constructs keys for both sides:
+         Montblanc key: DIM_Montblanc + "|" + V_Montblanc
+         Alfa key: DIM_Alfa + "|" + V_Alfa
+      Performs an outer merge and creates a "Status" column with:
+         - "Match" if found on both sides,
+         - "Missing in Alfa" if only in Montblanc,
+         - "Missing in Montblanc" if only in Alfa.
+    Returns the merged DataFrame.
+    """
+    logger.info("Comparing Montblanc and Alfa data.")
+    m_df = montblanc_df.copy()
+    a_df = alfa_df.copy()
+
+    m_df["key"] = m_df["DIM_Montblanc"].astype(str) + "|" + m_df["V_Montblanc"].astype(str)
+    a_df["key"] = a_df["DIM_Alfa"].astype(str) + "|" + a_df["V_Alfa"].astype(str)
+
+    merged = pd.merge(m_df, a_df, on="key", how="outer", indicator=True)
+    merged["Status"] = "Match"
+    merged.loc[merged["_merge"] == "left_only", "Status"] = "Missing in Alfa"
+    merged.loc[merged["_merge"] == "right_only", "Status"] = "Missing in Montblanc"
+    merged.drop(columns=["_merge", "key"], inplace=True)
+    merged["DIM_Alfa"] = merged["DIM_Alfa"].fillna("")
+    merged["V_Alfa"] = merged["V_Alfa"].fillna("")
+    merged["End Date"] = merged["End Date"].fillna("")
+    logger.info("Comparison completed.")
+    return merged
+
+def merge_with_exceptions(df, exc_df):
+    """
+    Merges the comparison DataFrame with exceptions.
+    For each record, creates a key for the Alfa side (DIM_Alfa + "|" + V_Alfa) and the Montblanc side 
+    (DIM_Montblanc + "|" + V_Montblanc). Then it attempts to match these keys against the exceptions key.
+    If found, the corresponding Comment is added.
+    A blank "Flag" column is added.
+    """
+    logger.info("Merging with exceptions.")
+    df["Key_Master"] = df["DIM_Montblanc"].astype(str).str.strip() + "|" + df["V_Montblanc"].astype(str).str.strip()
+    df["Key_Alfa"] = df["DIM_Alfa"].astype(str).str.strip() + "|" + df["V_Alfa"].astype(str).str.strip()
+
+    # Create a dictionary from exceptions.
+    exc_map = exc_df.set_index("Key")["Comment"].to_dict()
+    # Try to map from the Alfa key first; if not found, try the Montblanc key.
+    df["Comment"] = df["Key_Alfa"].map(exc_map).fillna(df["Key_Master"].map(exc_map)).fillna("")
+    df.drop(columns=["Key_Master", "Key_Alfa"], inplace=True)
+    df["Flag"] = ""
+    logger.info("Merge with exceptions completed.")
+    return df
