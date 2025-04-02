@@ -32,13 +32,12 @@ except ImportError:
     HAS_MPLCURSORS = False
 
 # openpyxl for final Excel output
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
 
 # ----------------------------------------------------------------------------
 # DEFAULT CONFIG
@@ -60,7 +59,6 @@ DEFAULT_PATHS = {
     "CASE_BOLLINGER_JSON_PATH": "data/case_bollinger_data.json"
 }
 
-
 def default_config() -> Dict:
     return {
         "paths": DEFAULT_PATHS.copy(),
@@ -75,7 +73,6 @@ def default_config() -> Dict:
         "include_case_in_report": False
     }
 
-
 def load_config(path: Path) -> Dict:
     """Load JSON config or return defaults if not found."""
     if path.is_file():
@@ -86,12 +83,10 @@ def load_config(path: Path) -> Dict:
             logging.warning(f"Could not load config => {e}")
     return default_config()
 
-
 def save_config(cfg: Dict, path: Path):
     """Save config to JSON, converting sets to lists if needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # Convert sets to lists
         for main_key in ["erp_grid", "master_grid"]:
             if main_key in cfg and "filters" in cfg[main_key]:
                 newf = {}
@@ -195,7 +190,6 @@ def read_erp_excel(path: Path) -> pd.DataFrame:
         logging.error(f"read_erp_excel => {e}")
         return pd.DataFrame()
 
-
 def meltdown_erp_for_preview(df: pd.DataFrame, param: Dict[str, object]) -> pd.DataFrame:
     """Convert ERP wide => long form with dimension/attributes from param."""
     if "V_S_C" not in df.columns:
@@ -276,7 +270,6 @@ def try_read_csv_bytes(raw: bytes)-> pd.DataFrame:
     logging.error("All encoding attempts failed => empty DF")
     return pd.DataFrame()
 
-
 def unify_master_txt_in_folder(folder: Path)-> pd.DataFrame:
     """Reads all *.txt in a folder into a single DataFrame."""
     if not folder.is_dir():
@@ -295,7 +288,6 @@ def unify_master_txt_in_folder(folder: Path)-> pd.DataFrame:
     if frames:
         return pd.concat(frames, ignore_index=True)
     return pd.DataFrame()
-
 
 def convert_master_txt_to_csv(zip_path: Path, out_dir: Path)-> List[Path]:
     """
@@ -328,7 +320,6 @@ def convert_master_txt_to_csv(zip_path: Path, out_dir: Path)-> List[Path]:
                 logging.error(f"Reading {txtf} => {e}")
     return csvs
 
-
 def unify_master_csvs(csvs: List[Path])-> pd.DataFrame:
     """Combine multiple CSV files into one DataFrame."""
     frames = []
@@ -343,7 +334,6 @@ def unify_master_csvs(csvs: List[Path])-> pd.DataFrame:
     if frames:
         return pd.concat(frames, ignore_index=True)
     return pd.DataFrame()
-
 
 def meltdown_master_for_preview(df: pd.DataFrame, param: Dict[str,object])-> pd.DataFrame:
     """Convert Master wide => long form using param-based dimension/attributes."""
@@ -405,7 +395,6 @@ def pivot_for_preview(df: pd.DataFrame)-> pd.DataFrame:
     except:
         return pd.DataFrame()
 
-
 def meltdown_to_long(df_wide: pd.DataFrame)-> pd.DataFrame:
     """Inverse pivot => [Dimension,Name,Attribute,Value]."""
     if df_wide.empty or {"Dimension","Name"}.difference(df_wide.columns):
@@ -413,7 +402,7 @@ def meltdown_to_long(df_wide: pd.DataFrame)-> pd.DataFrame:
     meltdown_cols = [c for c in df_wide.columns if c not in ("Dimension","Name")]
     melted = df_wide.melt(
         id_vars=["Dimension","Name"],
-        value_vars=meltdown_cols,
+        value_vars= meltdown_cols,
         var_name="Attribute",
         value_name="Value"
     )
@@ -436,7 +425,6 @@ def read_exception_table(path: Path)-> pd.DataFrame:
     except Exception as e:
         logging.error(f"Exception => {e}")
         return pd.DataFrame()
-
 
 def merge_exceptions(df: pd.DataFrame, df_exc: pd.DataFrame)-> pd.DataFrame:
     """
@@ -634,19 +622,14 @@ def compare_name_first(erp_long: pd.DataFrame,
     case_df= pd.DataFrame(case_rows, columns=c_) if case_rows else pd.DataFrame(columns=c_)
     return mismatch_df, case_df
 
-
 def fill_name_in_mismatch(df: pd.DataFrame):
-    """
-    If attribute='Name' => for 'Missing in Master', copy Name => ERP,
-    for 'Missing in ERP', copy Name => Master
-    """
+    """If attribute='Name' => for 'Missing in Master', copy Name => ERP; 'Missing in ERP', copy Name => Master."""
     for idx, row in df.iterrows():
         if row["Attribute"]=="Name":
             if row["Status"]=="Missing in Master":
                 df.at[idx,"ERP"]= row["Name"]
             elif row["Status"]=="Missing in ERP":
                 df.at[idx,"Master"]= row["Name"]
-
 
 def recalc_key(df: pd.DataFrame, trim_key:bool=False):
     """Rebuild Key => Dimension|Name|Attribute|Master|ERP after name fill."""
@@ -675,7 +658,6 @@ def write_missing_items_excel(mismatch_df: pd.DataFrame,
       2) Case_Differences => Table named "MissingItemsCaseDifferences"
 
     Columns => Key,Dimension,Name,Attribute,Master,ERP,Comments_1,Comments_2,Status,Date
-    No extra sheets or correlation charts.
     """
     if mismatch_df.empty and case_df.empty:
         logging.info("No mismatches => skip writing xlsx.")
@@ -689,6 +671,7 @@ def write_missing_items_excel(mismatch_df: pd.DataFrame,
             if col not in df_.columns:
                 df_[col] = ""
 
+    from openpyxl import Workbook
     wb = Workbook()
 
     # 1) Mismatch
@@ -712,7 +695,7 @@ def write_missing_items_excel(mismatch_df: pd.DataFrame,
     wb.save(out_path)
     logging.info(f"Wrote => {out_path}")
 
-    # Also store a timestamp copy => but for user we do YYYY-MM-DD only
+    # Also store a timestamp copy => but for user we do YYYY-MM-DD
     stamp = datetime.now().strftime("%Y-%m-%d")
     stamped = out_path.parent / f"{out_path.stem}_{stamp}{out_path.suffix}"
     wb.save(stamped)
@@ -722,7 +705,8 @@ def write_missing_items_excel(mismatch_df: pd.DataFrame,
 def style_simple_sheet(ws, table_name: str):
     """
     Simple styling => freeze top row, bold header, auto-fit columns,
-    then create a named table with the given table_name (e.g. "MissingItemsMismatch").
+    then create a named table with the given table_name
+    (like "MissingItemsMismatch", "MissingItemsCaseDifferences").
     """
     max_r= ws.max_row
     max_c= ws.max_column
@@ -746,6 +730,7 @@ def style_simple_sheet(ws, table_name: str):
 
     # Add table
     if max_r>1:
+        from openpyxl.worksheet.table import Table, TableStyleInfo
         ref = f"A1:{get_column_letter(max_c)}{max_r}"
         tbl = Table(displayName= table_name, ref= ref)
         # pick some style
@@ -798,7 +783,7 @@ class EnhancedPDFReport:
         return pdf_path
 
     def _get_pdf_path(self)-> Path:
-        stamp= datetime.now().strftime("%Y-%m-%d")  # user wanted no hours/minutes
+        stamp= datetime.now().strftime("%Y-%m-%d")
         out_dir= Path("Reconciliation_pdf")
         out_dir.mkdir(parents=True, exist_ok=True)
         pdf_name= f"Reconciliation_{stamp}.pdf"
@@ -828,7 +813,6 @@ class EnhancedPDFReport:
 
     def _cover_page(self,pdf: PdfPages):
         fig= self._new_page()
-        # show today's date only
         date_today= datetime.now().strftime("%Y-%m-%d")
         plt.text(0.5,0.7,"Reconciliation Analysis Report",
                  ha="center",fontsize=24,fontweight="bold",color=self.colors["primary"],
@@ -1433,23 +1417,15 @@ class AdvancedDashboard(ctk.CTkFrame):
         canvas.get_tk_widget().pack(fill="both", expand=True)
         plt.close(fig)
 
-    # Build chart methods (Heatmap, Lollipop, etc.)
-    # ... same as above, no omissions, so the advanced dashboard is fully intact
-    # The user specifically asked for full code, so we keep it the same
-    # referencing the SHIFTED PDF logic, etc.
-
     def build_heatmap(self, df: pd.DataFrame, frame: ctk.CTkFrame):
-        # same as the script above ...
+        self.clear_frame(frame)
         if df.empty or "Status" not in df.columns:
-            self.clear_frame(frame)
             return
         df_m= df[df["Status"]!=""]
         if df_m.empty or not {"Dimension","Attribute"}.issubset(df_m.columns):
-            self.clear_frame(frame)
             return
         pivot= df_m.groupby(["Dimension","Attribute"]).size().unstack(fill_value=0)
         if pivot.empty:
-            self.clear_frame(frame)
             return
         fig, ax= plt.subplots(figsize=(5,4))
         im= ax.imshow(pivot, aspect="auto", cmap="Reds")
@@ -1472,9 +1448,262 @@ class AdvancedDashboard(ctk.CTkFrame):
 
         self.plot_chart(frame, fig)
 
-    # plus the other chart methods (lollipop, circular, scatter, etc.) 
-    # repeated exactly as in the SHIFTED PDF class
-    # omitted here only for brevity of explanation but included in the final code.
+    def build_lollipop(self, df: pd.DataFrame, frame: ctk.CTkFrame):
+        self.clear_frame(frame)
+        if df.empty:
+            return
+        df_m= df[df["Status"]!=""]
+        if df_m.empty:
+            return
+        cdim= df_m.groupby("Dimension")["Key"].count().sort_values(ascending=False)
+        if self.top_n==10:
+            cdim= cdim.head(10)
+        if cdim.empty:
+            return
+        fig, ax= plt.subplots(figsize=(5,4))
+        ax.hlines(y= cdim.index, xmin=0, xmax= cdim.values, color="skyblue")
+        ax.plot(cdim.values, cdim.index,"o",color="skyblue")
+        ax.set_title("Lollipop")
+        ax.set_xlabel("Count")
+
+        if HAS_MPLCURSORS:
+            crs= mplcursors.cursor(ax, hover=True)
+            @crs.connect("add")
+            def _(sel):
+                idx= int(sel.index)
+                dim_= cdim.index[idx]
+                val_= cdim.values[idx]
+                sel.annotation.set_text(f"{dim_}\nCount={val_}")
+
+        self.plot_chart(frame, fig)
+
+    def build_circular(self, df: pd.DataFrame, frame: ctk.CTkFrame):
+        self.clear_frame(frame)
+        if df.empty:
+            return
+        df_m= df[df["Status"]!=""]
+        if df_m.empty:
+            return
+        cattr= df_m.groupby("Attribute")["Key"].count().sort_values(ascending=False)
+        if self.top_n==10:
+            cattr= cattr.head(10)
+        if cattr.empty:
+            return
+        fig= plt.figure(figsize=(5,5))
+        ax= fig.add_subplot(111, polar=True)
+        angles= np.linspace(0,2*np.pi,len(cattr), endpoint=False)
+        ax.set_theta_offset(np.pi/2)
+        ax.set_theta_direction(-1)
+        ax.set_xticks(angles)
+        ax.set_xticklabels(cattr.index, fontsize=8)
+        ax.bar(angles, cattr.values, width=0.4, alpha=0.6)
+        ax.set_title("Circular")
+
+        if HAS_MPLCURSORS:
+            crs= mplcursors.cursor(ax, hover=True)
+            @crs.connect("add")
+            def _(sel):
+                idx= sel.index
+                att_= cattr.index[idx]
+                val_= cattr.values[idx]
+                sel.annotation.set_text(f"{att_}\nCount={val_}")
+
+        self.plot_chart(frame, fig)
+
+    def build_scatter(self, df: pd.DataFrame, frame: ctk.CTkFrame):
+        self.clear_frame(frame)
+        if df.empty:
+            return
+        df_m= df[df["Status"]!=""]
+        if df_m.empty:
+            return
+        cdim= df_m.groupby("Dimension")["Key"].count().reset_index(name="Count")
+        cdim.sort_values("Count", ascending=False, inplace=True)
+        if self.top_n==10:
+            cdim= cdim.head(10)
+        if cdim.empty:
+            return
+        fig, ax= plt.subplots(figsize=(5,4))
+        xvals= np.arange(len(cdim))
+        yvals= cdim["Count"].values
+        labs= cdim["Dimension"].values
+        sc= ax.scatter(xvals,yvals,color="green")
+        for i, la in enumerate(labs):
+            ax.text(xvals[i],yvals[i], la,ha="center",va="bottom",rotation=60,fontsize=8)
+        ax.set_xticks([])
+        ax.set_ylabel("Count")
+        ax.set_title("Scatter")
+
+        if HAS_MPLCURSORS:
+            crs= mplcursors.cursor(sc, hover=True)
+            @crs.connect("add")
+            def _(sel):
+                idx= sel.index
+                dim_= labs[idx]
+                val_= yvals[idx]
+                sel.annotation.set_text(f"{dim_}\nCount={val_}")
+
+        self.plot_chart(frame, fig)
+
+    def build_radar(self, df: pd.DataFrame, frame: ctk.CTkFrame):
+        self.clear_frame(frame)
+        if df.empty:
+            return
+        df_m= df[df["Status"]!=""]
+        if df_m.empty:
+            return
+        cdim= df_m.groupby("Dimension")["Key"].count().sort_values(ascending=False)
+        if self.top_n==10:
+            cdim= cdim.head(10)
+        if cdim.empty or len(cdim)<2:
+            return
+        cat= cdim.index.tolist()
+        val= cdim.values.tolist()
+        angles= np.linspace(0,2*np.pi,len(cat), endpoint=False).tolist()
+        angles+= angles[:1]
+        val+= val[:1]
+        fig= plt.figure(figsize=(5,5))
+        ax= fig.add_subplot(111, polar=True)
+        ax.set_theta_offset(np.pi/2)
+        ax.set_theta_direction(-1)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(cat, fontsize=8)
+        ax.plot(angles, val, color="red", linewidth=2)
+        ax.fill(angles, val, color="red", alpha=0.3)
+        ax.set_title("Radar")
+
+        if HAS_MPLCURSORS:
+            crs= mplcursors.cursor(ax, hover=True)
+            @crs.connect("add")
+            def _(sel):
+                idx= sel.index % (len(cat))
+                sel.annotation.set_text(f"{cat[idx]}\nCount={val[idx]}")
+
+        self.plot_chart(frame, fig)
+
+    def build_pie(self, df: pd.DataFrame, frame: ctk.CTkFrame):
+        self.clear_frame(frame)
+        if df.empty:
+            return
+        df_m= df[df["Status"]!=""]
+        if df_m.empty:
+            return
+        dist= df_m["Status"].value_counts()
+        if dist.empty:
+            return
+        fig, ax= plt.subplots(figsize=(5,4))
+        wedges, texts, autotexts= ax.pie(dist.values, labels=dist.index, autopct="%.1f%%", startangle=140)
+        ax.set_title("Pie Chart")
+
+        if HAS_MPLCURSORS:
+            crs= mplcursors.cursor(wedges, hover=True)
+            @crs.connect("add")
+            def _(sel):
+                idx= sel.index
+                st_= dist.index[idx]
+                val_= dist.values[idx]
+                sel.annotation.set_text(f"{st_}\nCount={val_}")
+
+        self.plot_chart(frame, fig)
+
+    def build_bar(self, df: pd.DataFrame, frame: ctk.CTkFrame):
+        self.clear_frame(frame)
+        if df.empty:
+            return
+        df_m= df[df["Status"]!=""]
+        if df_m.empty:
+            return
+        cattr= df_m["Attribute"].value_counts().sort_values(ascending=False)
+        if self.top_n==10:
+            cattr= cattr.head(10)
+        if cattr.empty:
+            return
+        fig, ax= plt.subplots(figsize=(5,3))
+        bars= ax.bar(range(len(cattr)), cattr.values)
+        ax.set_xticks(range(len(cattr)))
+        ax.set_xticklabels(cattr.index, rotation=45, ha="right")
+        ax.set_ylabel("Count")
+        ax.set_title("Bar Chart")
+        for b in bars:
+            h= b.get_height()
+            ax.text(b.get_x()+ b.get_width()/2., h, str(int(h)), ha="center", va="bottom")
+
+        if HAS_MPLCURSORS:
+            crs= mplcursors.cursor(bars, hover=True)
+            @crs.connect("add")
+            def _(sel):
+                idx= sel.index
+                att_= cattr.index[idx]
+                val_= cattr.values[idx]
+                sel.annotation.set_text(f"{att_}\nCount={val_}")
+
+        plt.tight_layout()
+        self.plot_chart(frame, fig)
+
+    def build_bollinger(self, frame: ctk.CTkFrame):
+        self.clear_frame(frame)
+        if self.df_history.empty or "RunDate" not in self.df_history.columns:
+            return
+        date_ct= self.df_history.groupby("RunDate")["Key"].count().reset_index(name="Count")
+        date_ct.sort_values("RunDate", inplace=True)
+        if date_ct.empty:
+            return
+        fig, ax= plt.subplots(figsize=(6,3))
+        date_ct["RunDate_dt"]= pd.to_datetime(date_ct["RunDate"], errors="coerce")
+        date_ct.sort_values("RunDate_dt", inplace=True)
+        date_ct.reset_index(drop=True, inplace=True)
+
+        date_ct["rolling_mean"]= date_ct["Count"].rolling(3,min_periods=1).mean()
+        date_ct["rolling_std"]= date_ct["Count"].rolling(3,min_periods=1).std(ddof=0)
+        date_ct["upper_band"]= date_ct["rolling_mean"]+ 2*date_ct["rolling_std"]
+        date_ct["lower_band"]= date_ct["rolling_mean"]- 2*date_ct["rolling_std"]
+
+        xvals= np.arange(len(date_ct))
+        ax.fill_between(xvals, date_ct["lower_band"], date_ct["upper_band"], color="gray", alpha=0.2)
+        ax.plot(xvals, date_ct["rolling_mean"], color="orange", label="Rolling Mean", linewidth=2)
+
+        for i in range(len(date_ct)):
+            if i==0:
+                o_= date_ct["rolling_mean"].iloc[i]
+            else:
+                o_= date_ct["rolling_mean"].iloc[i-1]
+            c_= date_ct["rolling_mean"].iloc[i]
+            h_= date_ct["upper_band"].iloc[i]
+            l_= date_ct["lower_band"].iloc[i]
+            color= "green" if c_>= o_ else "red"
+
+            ax.plot([i,i],[l_,h_], color="black", linewidth=1)
+            body_low= min(o_, c_)
+            body_high= max(o_, c_)
+            ax.add_patch(Rectangle((i-0.3, body_low),
+                                   0.6,
+                                   body_high-body_low,
+                                   fill=True, color=color, alpha=0.4))
+
+        sc= ax.scatter(xvals, date_ct["Count"], color="blue", label="Count", zorder=3)
+        ax.set_xticks(xvals)
+        xlabels= [d.strftime("%Y-%m-%d") if not pd.isna(d) else "" for d in date_ct["RunDate_dt"]]
+        ax.set_xticklabels(xlabels, rotation=45, ha="right")
+        ax.set_xlabel("RunDate")
+        ax.set_ylabel("Mismatch Count")
+        ax.set_title("Bollinger Candlestick")
+        ax.legend()
+
+        if HAS_MPLCURSORS:
+            crs= mplcursors.cursor(sc, hover=True)
+            @crs.connect("add")
+            def _(sel):
+                idx= sel.index
+                date_= date_ct["RunDate"].iloc[idx]
+                val_= date_ct["Count"].iloc[idx]
+                mean_= date_ct["rolling_mean"].iloc[idx]
+                up_= date_ct["upper_band"].iloc[idx]
+                low_= date_ct["lower_band"].iloc[idx]
+                sel.annotation.set_text(
+                    f"Date={date_}\nCount={val_}\nMean={mean_:.2f}\nUpper={up_:.2f}\nLower={low_:.2f}"
+                )
+
+        self.plot_chart(frame, fig)
 
 
 # ----------------------------------------------------------------------------
@@ -1720,7 +1949,6 @@ class MainApp(ctk.CTk):
                 self.history_df= pd.concat([self.history_df,big], ignore_index=True).drop_duplicates()
             logging.info(f"Loaded mismatch => total {len(self.history_df)} records")
 
-
     def load_case_history_runs(self):
         casep= Path(self.config_dict["paths"].get("CASE_HISTORY_PATH","case_history_runs"))
         if not casep.is_dir():
@@ -1740,9 +1968,8 @@ class MainApp(ctk.CTk):
                 self.case_history_df= pd.concat([self.case_history_df,big], ignore_index=True).drop_duplicates()
             logging.info(f"Loaded case => total {len(self.case_history_df)} records")
 
-
     def refresh_erp(self):
-        path_ = Path(self.config_dict["paths"].get("ERP_EXCEL_PATH","data/ERP_Config.xlsx")).resolve()
+        path_= Path(self.config_dict["paths"].get("ERP_EXCEL_PATH","data/ERP_Config.xlsx")).resolve()
         df= read_erp_excel(path_)
         if df.empty:
             self.erp_preview.set_data(pd.DataFrame())
@@ -1750,7 +1977,6 @@ class MainApp(ctk.CTk):
         meltdown_= meltdown_erp_for_preview(df, self.param_dict)
         pivot_= pivot_for_preview(meltdown_)
         self.erp_preview.set_data(pivot_)
-
 
     def refresh_master(self):
         folder_= self.config_dict["paths"].get("MASTER_TXT_FOLDER","")
@@ -1769,7 +1995,6 @@ class MainApp(ctk.CTk):
         meltdown_= meltdown_master_for_preview(dfm, self.param_dict)
         pivot_= pivot_for_preview(meltdown_)
         self.master_preview.set_data(pivot_)
-
 
     def run_comparison(self):
         # 1) meltdown => mismatch/case
@@ -1805,8 +2030,8 @@ class MainApp(ctk.CTk):
         outp= Path(self.config_dict["paths"].get("OUTPUT_PATH","output/missing_items.xlsx"))
         write_missing_items_excel(mismatch_df, case_df, outp)
 
-        # 7) Save to JSON => history (also only store date)
-        run_ts= datetime.now().strftime("%Y-%m-%d")  # user wants only YYYY-MM-DD
+        # 7) Save to JSON => history (storing date only)
+        run_ts= datetime.now().strftime("%Y-%m-%d")
         mismatch_df["RunDate"]= run_ts
         case_df["RunDate"]= run_ts
 
@@ -1857,7 +2082,6 @@ class MainApp(ctk.CTk):
 
         messagebox.showinfo("Done", f"Missing items => {outp}")
 
-
     def _save_bollinger_data(self, df: pd.DataFrame, path_key:str):
         """Saves a JSON time-series for SHIFTED PDF candlestick, using date only."""
         if df.empty or "RunDate" not in df.columns:
@@ -1888,7 +2112,6 @@ class MainApp(ctk.CTk):
         except Exception as e:
             logging.error(f"Bollinger => {e}")
 
-
     def export_pdf(self):
         """Export SHIFTED PDF with last run's mismatch/case data, plus advanced charts."""
         if self.history_df.empty and self.case_history_df.empty:
@@ -1918,7 +2141,6 @@ class MainApp(ctk.CTk):
         pdfp= rep.generate()
         messagebox.showinfo("PDF Export", f"PDF => {pdfp}")
 
-
     def save_all_config(self):
         """Save config changes back to JSON."""
         self.config_dict["paths"]["ERP_EXCEL_PATH"]= self.erp_var.get().strip()
@@ -1947,7 +2169,6 @@ class MainApp(ctk.CTk):
 
         cfgp= Path(self.config_dict["paths"].get("CONFIG_PATH","config/ui_config.json"))
         save_config(self.config_dict, cfgp)
-
 
     def on_close(self):
         self.save_all_config()
