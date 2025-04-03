@@ -1,0 +1,308 @@
+Option Explicit
+
+Sub RefreshSmartViewTreeInChunks_NoSave()
+    On Error GoTo ErrHandler
+    
+    Dim arrSheets As Variant
+    Dim wsList As Worksheet
+    Dim ws As Worksheet
+    Dim ConnectionName As String
+    Dim Ret As Long, LastRow As Long
+    Dim ConnStatus As Integer
+    Dim startTime As Double
+    Dim hierarchyArray As Variant
+    Dim rangeName As String
+    Dim logSheet As Worksheet
+    Dim logRow As Long
+    
+    Dim startIndex As Long
+    Dim endIndex As Long
+    Dim rowsToProcess As Long
+    Dim totalRows As Long
+    Dim chunkSize As Long
+    Dim HeaderRow As Long
+    
+    startTime = Timer
+    chunkSize = 20
+    HeaderRow = 2
+    
+    On Error Resume Next
+    Set logSheet = ThisWorkbook.Sheets("ProcessLog")
+    On Error GoTo ErrHandler
+    
+    If logSheet Is Nothing Then
+        Set logSheet = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+        logSheet.Name = "ProcessLog"
+        With logSheet
+            .Range("A1") = "Timestamp"
+            .Range("B1") = "Sheet"
+            .Range("C1") = "Range Name"
+            .Range("D1") = "Action"
+            .Range("E1") = "Status"
+            .Range("F1") = "Details"
+            .Range("A1:F1").Font.Bold = True
+        End With
+        logRow = 2
+    Else
+        Dim tmpStart As Variant
+        On Error Resume Next
+        Set wsList = ThisWorkbook.Sheets("Lists")
+        If Not wsList Is Nothing Then
+            tmpStart = wsList.Range("nmStartIndex").Value
+            If IsNumeric(tmpStart) Then
+                If tmpStart <= 1 Then
+                    logSheet.Cells.Clear
+                    logSheet.Range("A1") = "Timestamp"
+                    logSheet.Range("B1") = "Sheet"
+                    logSheet.Range("C1") = "Range Name"
+                    logSheet.Range("D1") = "Action"
+                    logSheet.Range("E1") = "Status"
+                    logSheet.Range("F1") = "Details"
+                    logSheet.Range("A1:F1").Font.Bold = True
+                    logRow = 2
+                Else
+                    logRow = logSheet.Cells(logSheet.Rows.Count, "A").End(xlUp).Row + 1
+                End If
+            Else
+                logRow = logSheet.Cells(logSheet.Rows.Count, "A").End(xlUp).Row + 1
+            End If
+        Else
+            logRow = logSheet.Cells(logSheet.Rows.Count, "A").End(xlUp).Row + 1
+        End If
+    End If
+    
+    On Error Resume Next
+    Set wsList = ThisWorkbook.Sheets("Lists")
+    On Error GoTo ErrHandler
+    
+    If wsList Is Nothing Then
+        MsgBox "Required 'Lists' sheet not found!", vbCritical
+        GoTo Cleanup
+    End If
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.Calculation = xlCalculationManual
+    
+    With wsList
+        On Error Resume Next
+        ConnectionName = .Range("nmConnectionName").Value
+        If Err.Number <> 0 Or ConnectionName = "" Then
+            MsgBox "Named range 'nmConnectionName' not found or empty!", vbCritical
+            GoTo Cleanup
+        End If
+        
+        arrSheets = .Range("Hierarchy_Matrix").Value
+        If Err.Number <> 0 Then
+            MsgBox "Named range 'Hierarchy_Matrix' not found!", vbCritical
+            GoTo Cleanup
+        End If
+        
+        startIndex = .Range("nmStartIndex").Value
+        If startIndex < 1 Then
+            startIndex = 1
+        End If
+        On Error GoTo ErrHandler
+    End With
+    
+    totalRows = UBound(arrSheets) - LBound(arrSheets) + 1
+    
+    If startIndex > totalRows Then
+        MsgBox "All sheets have been processed already.", vbInformation
+        GoTo Cleanup
+    End If
+    
+    rowsToProcess = chunkSize
+    If (startIndex + chunkSize - 1) > totalRows Then
+        rowsToProcess = totalRows - (startIndex - 1)
+    End If
+    
+    endIndex = startIndex + rowsToProcess - 1
+    
+    With logSheet
+        .Cells(logRow, 1).Value = Now
+        .Cells(logRow, 2).Value = "ALL"
+        .Cells(logRow, 3).Value = "N/A"
+        .Cells(logRow, 4).Value = "Process Chunk"
+        .Cells(logRow, 5).Value = "INFO"
+        .Cells(logRow, 6).Value = "Connection: " & ConnectionName & " | Rows " & startIndex & " to " & endIndex
+    End With
+    logRow = logRow + 1
+    
+    Dim currentRow As Long
+    For currentRow = startIndex To endIndex
+        On Error Resume Next
+        Set ws = ThisWorkbook.Worksheets(arrSheets(currentRow, 1))
+        If ws Is Nothing Then
+            With logSheet
+                .Cells(logRow, 1).Value = Now
+                .Cells(logRow, 2).Value = arrSheets(currentRow, 1)
+                .Cells(logRow, 3).Value = "N/A"
+                .Cells(logRow, 4).Value = "Sheet Check"
+                .Cells(logRow, 5).Value = "ERROR"
+                .Cells(logRow, 6).Value = "Sheet not found"
+            End With
+            logRow = logRow + 1
+            GoTo SkipSheet
+        End If
+        On Error GoTo ErrHandler
+        
+        rangeName = Trim(arrSheets(currentRow, 2))
+        If rangeName = "" Then
+            With logSheet
+                .Cells(logRow, 1).Value = Now
+                .Cells(logRow, 2).Value = ws.Name
+                .Cells(logRow, 3).Value = "EMPTY"
+                .Cells(logRow, 4).Value = "Range Name Check"
+                .Cells(logRow, 5).Value = "ERROR"
+                .Cells(logRow, 6).Value = "Range name is empty"
+            End With
+            logRow = logRow + 1
+            GoTo SkipSheet
+        End If
+        
+        On Error Resume Next
+        ThisWorkbook.Names(rangeName).Delete
+        On Error GoTo ErrHandler
+        
+        With ws
+            Ret = HypUIConnect(.Name, "", "", ConnectionName)
+            ConnStatus = HypConnected(.Name)
+            
+            If ConnStatus <> -1 Then
+                With logSheet
+                    .Cells(logRow, 1).Value = Now
+                    .Cells(logRow, 2).Value = .Name
+                    .Cells(logRow, 3).Value = rangeName
+                    .Cells(logRow, 4).Value = "HypUIConnect"
+                    .Cells(logRow, 5).Value = "ERROR"
+                    .Cells(logRow, 6).Value = "Connection failed. Status: " & ConnStatus
+                End With
+                logRow = logRow + 1
+                GoTo SkipSheet
+            End If
+            
+            Application.SendKeys "~"
+            
+            LastRow = .Range("A" & .Rows.Count).End(xlUp).Row
+            
+            With logSheet
+                .Cells(logRow, 1).Value = Now
+                .Cells(logRow, 2).Value = .Name
+                .Cells(logRow, 3).Value = rangeName
+                .Cells(logRow, 4).Value = "Before Delete"
+                .Cells(logRow, 5).Value = "INFO"
+                .Cells(logRow, 6).Value = "Last row: " & LastRow & ", Header: " & HeaderRow
+            End With
+            logRow = logRow + 1
+            
+            If LastRow > HeaderRow Then
+                .Rows(HeaderRow & ":" & LastRow - 1).Delete Shift:=xlUp
+            End If
+            
+            LastRow = .Range("A" & .Rows.Count).End(xlUp).Row
+            
+            Ret = HypSetSheetOption(.Name, HYP_SVC_OPTIONS_INDEX.HSV_MEMBER_DISPLAY, 1)
+            
+            Ret = HypZoomIn(.Name, .Range("A" & LastRow), 1, False)
+            If Ret <> 0 Then
+                With logSheet
+                    .Cells(logRow, 1).Value = Now
+                    .Cells(logRow, 2).Value = .Name
+                    .Cells(logRow, 3).Value = rangeName
+                    .Cells(logRow, 4).Value = "HypZoomIn"
+                    .Cells(logRow, 5).Value = "ERROR"
+                    .Cells(logRow, 6).Value = "Zoom in failed. Code: " & Ret
+                End With
+                logRow = logRow + 1
+                GoTo SkipSheet
+            End If
+            
+            LastRow = .Range("A" & .Rows.Count).End(xlUp).Row
+            
+            If LastRow >= HeaderRow Then
+                ThisWorkbook.Names.Add Name:=rangeName, RefersTo:=.Range("A" & HeaderRow & ":A" & LastRow)
+                hierarchyArray = .Range("A" & HeaderRow & ":A" & LastRow).Value
+                With logSheet
+                    .Cells(logRow, 1).Value = Now
+                    .Cells(logRow, 2).Value = .Name
+                    .Cells(logRow, 3).Value = rangeName
+                    .Cells(logRow, 4).Value = "Processing Complete"
+                    .Cells(logRow, 5).Value = "SUCCESS"
+                    .Cells(logRow, 6).Value = "Items: " & (LastRow - HeaderRow + 1)
+                End With
+            Else
+                With logSheet
+                    .Cells(logRow, 1).Value = Now
+                    .Cells(logRow, 2).Value = .Name
+                    .Cells(logRow, 3).Value = rangeName
+                    .Cells(logRow, 4).Value = "Processing Complete"
+                    .Cells(logRow, 5).Value = "WARNING"
+                    .Cells(logRow, 6).Value = "Empty hierarchy"
+                End With
+            End If
+            logRow = logRow + 1
+            Erase hierarchyArray
+        End With
+SkipSheet:
+    Next currentRow
+    
+    With logSheet
+        .Columns("A:F").AutoFit
+        .Range("A1:F" & logRow - 1).Sort Key1:=.Range("A1"), Order1:=xlDescending, Header:=xlYes
+        .Range("E2:E" & logRow - 1).FormatConditions.Delete
+        .Range("E2:E" & logRow - 1).FormatConditions.Add Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""SUCCESS"""
+        .Range("E2:E" & logRow - 1).FormatConditions(1).Interior.Color = RGB(198, 239, 206)
+        .Range("E2:E" & logRow - 1).FormatConditions.Add Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""WARNING"""
+        .Range("E2:E" & logRow - 1).FormatConditions(2).Interior.Color = RGB(255, 235, 156)
+        .Range("E2:E" & logRow - 1).FormatConditions.Add Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""INFO"""
+        .Range("E2:E" & logRow - 1).FormatConditions(3).Interior.Color = RGB(197, 217, 241)
+        .Range("E2:E" & logRow - 1).FormatConditions.Add Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""ERROR"""
+        .Range("E2:E" & logRow - 1).FormatConditions(4).Interior.Color = RGB(255, 199, 206)
+    End With
+    
+    wsList.Range("nmStartIndex").Value = endIndex + 1
+    
+    With logSheet
+        .Cells(logRow, 1).Value = Now
+        .Cells(logRow, 2).Value = "ALL"
+        .Cells(logRow, 4).Value = "Chunk Completed"
+        .Cells(logRow, 5).Value = "INFO"
+        .Cells(logRow, 6).Value = "Processed rows " & startIndex & " to " & endIndex
+    End With
+    logRow = logRow + 1
+
+Cleanup:
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.Calculation = xlCalculationAutomatic
+    
+    With logSheet
+        .Cells(logRow, 1).Value = Now
+        .Cells(logRow, 2).Value = "ALL"
+        .Cells(logRow, 3).Value = "N/A"
+        .Cells(logRow, 4).Value = "Process End"
+        .Cells(logRow, 5).Value = "INFO"
+        .Cells(logRow, 6).Value = "Duration: " & Format(Timer - startTime, "0.00") & " seconds"
+    End With
+    logRow = logRow + 1
+    
+    logSheet.Activate
+    
+    Exit Sub
+    
+ErrHandler:
+    With logSheet
+        .Cells(logRow, 1).Value = Now
+        If Not ws Is Nothing Then
+            .Cells(logRow, 2).Value = ws.Name
+        Else
+            .Cells(logRow, 2).Value = "UNKNOWN"
+        End If
+        .Cells(logRow, 4).Value = "Error"
+        .Cells(logRow, 5).Value = "ERROR"
+        .Cells(logRow, 6).Value = "Err " & Err.Number & ": " & Err.Description
+    End With
+    logRow = logRow + 1
+    Resume Cleanup
+End Sub
